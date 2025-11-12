@@ -85,15 +85,18 @@ export class TileView extends Phaser.GameObjects.Container {
   }
 
   pulseMerge(): Promise<void> {
-    return new Promise(resolve => {
-      this.scene.tweens.add({
-        targets: this,
-        scale: 1.1,
-        yoyo: true,
-        duration: 120,
-        ease: 'Sine.easeInOut',
-        onComplete: () => resolve()
-      });
+  // ensure the graphics starts at scale 1
+  this.g.setScale(1, 1);
+  return new Promise(resolve => {
+    this.scene.tweens.add({
+      targets: this.g,          // ⬅️ pulse only the background
+      scaleX: 1.06,
+      scaleY: 1.06,
+      yoyo: true,
+      duration: 90,             // was 120; shorter = less shimmer
+      ease: 'Quad.easeOut',
+      onComplete: () => resolve()
     });
-  }
+  });
+}
 }
