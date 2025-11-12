@@ -12,6 +12,7 @@ import { BoardView } from '../game/ui/BoardView';
 import {
   newGame,
   tryMove,
+  planMove,
   undo,
   hasMoves,
   hasWon,
@@ -64,6 +65,9 @@ export class PlayScene extends BasePlayScene {
   private state!: GameState;
   private board!: BoardView;
 
+  private animLock = false;
+  private queued: ('up'|'down'|'left'|'right') | null = null;
+
   private worldRoot!: Phaser.GameObjects.Container;
   private fitter?: BoardFitter;
   private inputCtl?: GameInputController;
@@ -87,7 +91,7 @@ export class PlayScene extends BasePlayScene {
       radius: 12,
     });
     this.worldRoot.add(this.board);
-    this.board.renderGrid(this.state.grid);
+    this.board.syncInstant(this.state.grid);
 
     // Framework BoardFitter — fits/centers based on dynamic size
     this.fitter = new BoardFitter(
@@ -126,7 +130,7 @@ export class PlayScene extends BasePlayScene {
   // --- internal helpers ---
   private onNewGame = () => {
     this.state = newGame({ size: 4, target: 2048 });
-    this.board.renderGrid(this.state.grid);
+    this.board.syncInstant(this.state.grid);
     this.emitScore();
     this.toast('New game');
   };
@@ -135,7 +139,7 @@ export class PlayScene extends BasePlayScene {
     const next = undo(this.state);
     if (next) {
       this.state = next;
-      this.board.renderGrid(this.state.grid);
+      this.board.syncInstant(this.state.grid);
       this.emitScore();
       this.toast('Undid last move');
     } else {
@@ -144,20 +148,49 @@ export class PlayScene extends BasePlayScene {
   };
 
   private onMove(dir: 'up' | 'down' | 'left' | 'right') {
-    const map: Record<string, MoveDir> = { up: 'Up', down: 'Down', left: 'Left', right: 'Right' };
-    const { next, changed } = tryMove(this.state, map[dir]);
-    if (!changed) return;
-
+  if (this.animLock) {
+    if (!this.queued) this.queued = dir;
+    return;
+  }
+  const map: Record<string, MoveDir> = {
+    up: MoveDir.Up,
+    down: MoveDir.Down,
+    left: MoveDir.Left,
+    right: MoveDir.Right,
+  };
+  const plan = planMove(this.state, map[dir]);
+  if (!plan.changed) {
+    const axis = (dir === 'left' || dir === 'right') ? 'x' : 'y';
+    const delta = (dir === 'left' || dir === 'up') ? -8 : 8;
+    this.tweens.add({
+      targets: this.worldRoot,
+      [axis]: `+=${delta}`,
+      yoyo: true,
+      duration: 60,
+      ease: 'Sine.easeInOut',
+    });
+    return;
+  }
+  this.animLock = true;
+  this.board.animateMoves(plan.diffs, 100).then(async () => {
+    const { next } = tryMove(this.state, map[dir]);
+    const spawn = findSpawn(plan.gridAfterMove, next.grid);
+    const mergeTargets = collectMergeTargets(plan.diffs);
     this.state = next;
-    this.board.renderGrid(this.state.grid);
     this.emitScore();
-
+    await this.board.postCommitEffects(this.state.grid, mergeTargets, spawn);
     if (hasWon(this.state.grid, this.state.target)) {
       this.toast('You win!');
     } else if (!hasMoves(this.state.grid)) {
       this.toast('Game over');
     }
-  }
+    this.animLock = false;
+    if (this.queued) {
+      const q = this.queued; this.queued = null; this.onMove(q);
+    }
+  });
+}
+
 
   private emitScore() {
     this.game.events.emit('hud:score', {
@@ -173,3 +206,21 @@ export class PlayScene extends BasePlayScene {
 }
 
 export default PlayScene;
+
+function findSpawn(before: number[][], after: number[][]): {r:number;c:number} | undefined {
+  for (let r=0; r<after.length; r++) {
+    for (let c=0; c<after[r].length; c++) {
+      if (before[r][c] === 0 && after[r][c] !== 0) return { r, c };
+    }
+  }
+  return undefined;
+}
+function collectMergeTargets(diffs: { to:{r:number;c:number}; survivor?:boolean; newValue?: number }[]): {r:number;c:number;newValue:number}[] {
+  const m = new Map<string, number>();
+  for (const d of diffs) if (d.survivor && d.newValue) {
+    m.set(`${d.to.r},${d.to.c}`, d.newValue);
+  }
+  return Array.from(m.entries()).map(([k,v]) => {
+    const [rs,cs] = k.split(','); return { r: parseInt(rs,10), c: parseInt(cs,10), newValue: v };
+  });
+}

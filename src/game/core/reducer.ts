@@ -6,6 +6,90 @@ import { normalizeSeed, nextInt, chance } from './rng';
 
 const DEFAULT_SPAWN: SpawnRule = { twoProb: 0.9 };
 
+export type MoveCell = { r: number; c: number };
+export type MoveDiff = {
+  from: MoveCell;
+  to: MoveCell;
+  value: number;
+  merged?: boolean;      // this mover disappears into survivor
+  survivor?: boolean;    // this mover becomes the resulting tile
+  newValue?: number;     // only set on survivor when merged
+};
+
+/** For UI: plan a move without mutating state.
+ * Returns whether the grid changes, the grid after compaction+merge (pre-spawn),
+ * the list of per-tile movements/merges, and the gained score (for effects).
+ */
+export function planMove(state: GameState, dir: MoveDir): {
+  changed: boolean;
+  gridAfterMove: Grid;
+  diffs: MoveDiff[];
+  gainedScore: number;
+} {
+  const n = state.size;
+  const src = state.grid;
+  const out = makeGrid(n);
+  const diffs: MoveDiff[] = [];
+  let totalScore = 0;
+
+  // Helper to get the ordered list of cell coordinates for a line, in the processing order
+  const lineCoords = (dir: MoveDir, line: number): MoveCell[] => {
+    const cells: MoveCell[] = [];
+    if (dir === MoveDir.Left) {
+      for (let c=0;c<n;c++) cells.push({ r: line, c });
+    } else if (dir === MoveDir.Right) {
+      for (let c=n-1;c>=0;c--) cells.push({ r: line, c });
+    } else if (dir === MoveDir.Up) {
+      for (let r=0;r<n;r++) cells.push({ r, c: line });
+    } else { // Down
+      for (let r=n-1;r>=0;r--) cells.push({ r, c: line });
+    }
+    return cells;
+  };
+
+  for (let line=0; line<n; line++) {
+    const cells = lineCoords(dir, line);
+    const nonZero: { idx: number; pos: MoveCell; val: number }[] = [];
+    for (let i=0;i<n;i++) {
+      const {r,c} = cells[i];
+      const v = src[r][c];
+      if (v !== 0) nonZero.push({ idx: i, pos: {r,c}, val: v });
+    }
+    // Build merged outputs in processing order
+    const outputs: { val: number; srcs: { idx: number; pos: MoveCell; val: number }[]; merged: boolean }[] = [];
+    for (let i=0;i<nonZero.length;i++) {
+      const cur = nonZero[i];
+      const next = nonZero[i+1];
+      if (next && next.val === cur.val) {
+        outputs.push({ val: cur.val * 2, srcs: [cur, next], merged: true });
+        totalScore += cur.val * 2;
+        i += 1;
+      } else {
+        outputs.push({ val: cur.val, srcs: [cur], merged: false });
+      }
+    }
+    // Write outputs into out grid and build diffs
+    for (let k=0; k<outputs.length; k++) {
+      const dest = cells[k]; // k-th slot in processing order
+      const o = outputs[k];
+      out[dest.r][dest.c] = o.val;
+      if (o.srcs.length === 1) {
+        const s = o.srcs[0];
+        diffs.push({ from: s.pos, to: dest, value: s.val });
+      } else {
+        // two sources; choose first as survivor
+        const [a,b] = o.srcs;
+        diffs.push({ from: a.pos, to: dest, value: a.val, survivor: true, newValue: o.val });
+        diffs.push({ from: b.pos, to: dest, value: b.val, merged: true });
+      }
+    }
+  }
+
+  const changed = !equalGrid(src, out);
+  return { changed, gridAfterMove: out, diffs, gainedScore: totalScore };
+}
+
+
 export function newGame(params: NewGameParams = {}): GameState {
   const size = params.size ?? 4;
   const target = params.target ?? 2048;
