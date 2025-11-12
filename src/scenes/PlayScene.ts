@@ -41,8 +41,8 @@ class GameInputController extends DirectionalInputController {
       allowWASD: true,
       allowSwipe: true,
       allowGamepad: true,
-      throttleMs: 80,
-      repeatMode: 'repeat',
+      throttleMs: 150,
+      repeatMode: 'edge',
       // explicit bindings (arrows + WASD)
       bindings: {
         up:    [Phaser.Input.Keyboard.KeyCodes.UP,    Phaser.Input.Keyboard.KeyCodes.W],
@@ -147,50 +147,71 @@ export class PlayScene extends BasePlayScene {
     }
   };
 
-  private onMove(dir: 'up' | 'down' | 'left' | 'right') {
-  if (this.animLock) {
-    if (!this.queued) this.queued = dir;
-    return;
-  }
-  const map: Record<string, MoveDir> = {
-    up: MoveDir.Up,
-    down: MoveDir.Down,
-    left: MoveDir.Left,
-    right: MoveDir.Right,
-  };
-  const plan = planMove(this.state, map[dir]);
-  if (!plan.changed) {
-    const axis = (dir === 'left' || dir === 'right') ? 'x' : 'y';
-    const delta = (dir === 'left' || dir === 'up') ? -8 : 8;
-    this.tweens.add({
-      targets: this.worldRoot,
-      [axis]: `+=${delta}`,
-      yoyo: true,
-      duration: 60,
-      ease: 'Sine.easeInOut',
-    });
-    return;
-  }
-  this.animLock = true;
-  this.board.animateMoves(plan.diffs, 100).then(async () => {
-    const { next } = tryMove(this.state, map[dir]);
-    const spawn = findSpawn(plan.gridAfterMove, next.grid);
-    const mergeTargets = collectMergeTargets(plan.diffs);
-    this.state = next;
-    this.emitScore();
-    await this.board.postCommitEffects(this.state.grid, mergeTargets, spawn);
-    if (hasWon(this.state.grid, this.state.target)) {
-      this.toast('You win!');
-    } else if (!hasMoves(this.state.grid)) {
-      this.toast('Game over');
+  private async onMove(dir: 'up' | 'down' | 'left' | 'right') {
+    if (this.animLock) {
+      if (!this.queued) this.queued = dir;
+      return;
     }
-    this.animLock = false;
-    if (this.queued) {
-      const q = this.queued; this.queued = null; this.onMove(q);
+    this.animLock = true; // ⬅️ lock immediately
+  
+    const map: Record<string, MoveDir> = {
+      up: MoveDir.Up,
+      down: MoveDir.Down,
+      left: MoveDir.Left,
+      right: MoveDir.Right,
+    };
+  
+    const plan = planMove(this.state, map[dir]);
+  
+    // Invalid move: do a nudge, then unlock and play any queued input
+    if (!plan.changed) {
+      const axis = dir === 'left' || dir === 'right' ? 'x' : 'y';
+      const delta = dir === 'left' || dir === 'up' ? -8 : 8;
+      await new Promise<void>((resolve) => {
+        this.tweens.add({
+          targets: this.worldRoot,
+          [axis]: `+=${delta}`,
+          yoyo: true,
+          duration: 60,
+          ease: 'Sine.easeInOut',
+          onComplete: () => resolve(),
+        });
+      });
+      this.animLock = false;
+      if (this.queued) {
+        const q = this.queued; this.queued = null;
+        this.onMove(q);
+      }
+      return;
     }
-  });
-}
-
+  
+    try {
+      // Pre-commit animation
+      await this.board.animateMoves(plan.diffs, 100);
+  
+      // Commit + effects
+      const { next } = tryMove(this.state, map[dir]);
+      const spawn = findSpawn(plan.gridAfterMove, next.grid);
+      const mergeTargets = collectMergeTargets(plan.diffs);
+  
+      this.state = next;
+      this.emitScore();
+  
+      await this.board.postCommitEffects(this.state.grid, mergeTargets, spawn);
+  
+      if (hasWon(this.state.grid, this.state.target)) {
+        this.toast('You win!');
+      } else if (!hasMoves(this.state.grid)) {
+        this.toast('Game over');
+      }
+    } finally {
+      this.animLock = false; // ⬅️ always release
+      if (this.queued) {
+        const q = this.queued; this.queued = null;
+        this.onMove(q);
+      }
+    }
+  }
 
   private emitScore() {
     this.game.events.emit('hud:score', {
