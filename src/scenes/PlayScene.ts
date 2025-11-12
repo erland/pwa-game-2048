@@ -19,6 +19,7 @@ import {
   MoveDir,
   GameState,
 } from '../game/core';
+import UIScene from './UIScene';
 
 /** Maps framework Dir4 to our reducer’s dir strings */
 function dir4ToStr(d: Dir4): 'up' | 'down' | 'left' | 'right' {
@@ -111,7 +112,14 @@ export class PlayScene extends BasePlayScene {
     this.inputCtl = new GameInputController(this, (dir) => this.onMove(dir));
     this.inputCtl.attach();
 
-    // Initial HUD sync
+    // Launch HUD above the game
+    this.scene.launch(UIScene.KEY);
+    this.scene.bringToTop(UIScene.KEY);
+
+    // Let UI ask for state too (optional but robust)
+    this.game.events.on('hud:request', () => this.emitScore(), this);
+
+    // Initial HUD sync (see step 3)
     this.emitScore();
   }
 

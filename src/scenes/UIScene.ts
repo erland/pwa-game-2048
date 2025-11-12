@@ -7,6 +7,8 @@ export class UIScene extends Phaser.Scene {
   private bestText!: Phaser.GameObjects.Text;
   private toastText?: Phaser.GameObjects.Text;
 
+  constructor() { super(UIScene.KEY); }  // ✅ register the key
+
   create(): void {
     const pad = 16;
     const style = { fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto', fontSize: '20px', color: '#ffffff' };
@@ -26,6 +28,9 @@ export class UIScene extends Phaser.Scene {
     // Listen for updates from PlayScene
     this.game.events.on('hud:score', this.onHudScore, this);
     this.game.events.on('hud:toast', this.onToast, this);
+
+    // Ask PlayScene to send the current values
+    this.game.events.emit('hud:request');
   }
 
   shutdown(): void {
