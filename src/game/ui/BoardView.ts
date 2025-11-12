@@ -129,21 +129,26 @@ export class BoardView extends Phaser.GameObjects.Container {
   }
 
   /** After committing the state, pulse merged survivors and animate spawned tile. */
-  public async postCommitEffects(grid: number[][], mergeTargets: {r:number;c:number;newValue:number}[], spawn?: {r:number;c:number}) {
-    this.syncInstant(grid);
-    // Pulse all merge targets
-    for (const m of mergeTargets) {
+  public async postCommitEffects(
+    grid: number[][],
+    mergeTargets: { r:number; c:number; newValue:number }[],
+    spawn?: { r:number; c:number }
+  ) {
+    this.syncInstant(grid); // tiles are already at their final values/positions
+  
+    // Pulse all survivors in parallel (no re-setValue needed)
+    const pulses = mergeTargets.map(m => {
       const t = this.tiles.get(`${m.r},${m.c}`);
-      if (t) {
-        t.setValue(m.newValue);
-        await t.pulseMerge();
-      }
-    }
-    // Spawn effect
+      return t ? t.pulseMerge() : Promise.resolve();
+    });
+  
+    // Spawn animation (if any)
+    let spawnP: Promise<void> = Promise.resolve();
     if (spawn) {
-      const key = `${spawn.r},${spawn.c}`;
-      const t = this.tiles.get(key);
-      if (t) await t.spawnIn();
+      const t = this.tiles.get(`${spawn.r},${spawn.c}`);
+      if (t) spawnP = t.spawnIn();
     }
+  
+    await Promise.all([spawnP, ...pulses]);
   }
 }

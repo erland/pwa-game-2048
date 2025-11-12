@@ -101,7 +101,8 @@ export class PlayScene extends BasePlayScene {
       { fitMode: 'fit', integerZoom: true }
     );
     this.fitter.attach();
-
+    this.cameras.main.setRoundPixels(true);
+    
     // UIScene comms
     this.game.events.on('ui:new', this.onNewGame, this);
     this.game.events.on('ui:undo', this.onUndo, this);

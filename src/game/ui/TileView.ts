@@ -19,6 +19,7 @@ export class TileView extends Phaser.GameObjects.Container {
       color: '#776e65',
       align: 'center',
     }).setOrigin(0.5);
+    this.label.setResolution?.(2);
     this.add([this.g, this.label]);
   }
 
