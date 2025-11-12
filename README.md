@@ -1,6 +1,6 @@
 # 2048 game as a PWA
 
-    Minimal Phaser + Vite starter wired to `@SCOPE/pwa-game-2d-framework`.
+    Minimal Phaser + Vite starter wired to `@erlandlindmark/pwa-game-2d-framework`.
 
     ## Setup
 
