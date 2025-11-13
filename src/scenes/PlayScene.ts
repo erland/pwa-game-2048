@@ -20,6 +20,8 @@ import {
   GameState,
 } from '../game/core';
 import UIScene from './UIScene';
+import { loadSettings, saveSettings, type Settings } from '../game/services/settings';
+import { saveGame, loadGame, clearGame } from '../game/services/persistence';
 
 /** Maps framework Dir4 to our reducer’s dir strings */
 function dir4ToStr(d: Dir4): 'up' | 'down' | 'left' | 'right' {
@@ -74,28 +76,43 @@ export class PlayScene extends BasePlayScene {
   private inputCtl?: GameInputController;
   // Show Win dialog only once per game
   private winAcknowledged = false;
-  private gameConfig = { size: 4, target: 32 };
+  private gameConfig!: { size: number; target: number };
+  private reducedMotion = false;
+  private undoEnabled = true;
+  private boardRows = 0;
+  private boardCols = 0;
+  
 
   /** BasePlayScene will call this (no args). Build your world here. */
   protected buildWorld(): void {
     // Root for this scene’s content
     this.worldRoot = this.add.container(0, 0);
 
+    // Load settings
+    const s = loadSettings();
+    this.gameConfig = { size: s.size, target: s.target };
+    this.reducedMotion =
+      s.reducedMotion || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || false;
+    this.undoEnabled = s.undoEnabled !== false;
+
     // Domain state
+    clearGame();
     this.state = newGame(this.gameConfig);
 
     // Board view (no textures; graphics+text)
-    const rows = this.state.grid.length;
-    const cols = this.state.grid[0].length;
-    this.board = new BoardView(this, {
-      rows,
-      cols,
-      tileSize: 96,
-      gap: 12,
-      radius: 12,
-    });
-    this.worldRoot.add(this.board);
-    this.board.syncInstant(this.state.grid);
+    this.ensureBoardMatchesState();
+
+    // Try resume from last session if compatible
+    const saved = loadGame();
+    if (
+      saved &&
+      saved.grid.length === this.state.grid.length &&
+      saved.grid[0].length === this.state.grid[0].length &&
+      saved.target === this.state.target
+    ) {
+      this.state = saved;
+      this.board.syncInstant(this.state.grid);
+    }
 
     // Framework BoardFitter — fits/centers based on dynamic size
     this.fitter = new BoardFitter(
@@ -106,11 +123,21 @@ export class PlayScene extends BasePlayScene {
     );
     this.fitter.attach();
     this.cameras.main.setRoundPixels(true);
-    
+
     // UIScene comms
     this.game.events.on('ui:new', this.onNewGame, this);
     this.game.events.on('ui:undo', this.onUndo, this);
     this.game.events.on('ui:continue', this.onContinue, this);
+
+    // ✅ Provide current settings to UIScene on request
+    this.game.events.on('ui:requestSettings', () => {
+      this.game.events.emit('ui:settings', {
+        size: this.gameConfig.size,
+        target: this.gameConfig.target,
+        reducedMotion: this.reducedMotion,
+        undoEnabled: this.undoEnabled,
+      });
+    }, this);
 
     // Framework DirectionalInputController (keyboard+swipe+gamepad)
     this.inputCtl = new GameInputController(this, (dir) => this.onMove(dir));
@@ -123,9 +150,48 @@ export class PlayScene extends BasePlayScene {
     // Let UI ask for state too (optional but robust)
     this.game.events.on('hud:request', () => this.emitScore(), this);
 
-    // Initial HUD sync (see step 3)
+    // Settings
+    this.game.events.on('ui:applySettings', this.onApplySettings, this);
+
+    // Initial HUD sync
     this.emitScore();
   }
+
+  /** Create or resize the BoardView to match current this.state.grid, then sync. */
+  private ensureBoardMatchesState() {
+    const rows = this.state.grid.length;
+    const cols = this.state.grid[0].length;
+    const sizeChanged = !this.board || rows !== this.boardRows || cols !== this.boardCols;
+
+    if (sizeChanged) {
+      if (this.board) this.board.destroy();
+
+      this.board = new BoardView(this, {
+        rows,
+        cols,
+        tileSize: 96,
+        gap: 12,
+        radius: 12,
+      });
+      this.worldRoot.add(this.board);
+
+      this.boardRows = rows;
+      this.boardCols = cols;
+    }
+
+    this.board.syncInstant(this.state.grid);
+  }
+
+  private onApplySettings = (payload: Settings) => {
+    const { size, target, reducedMotion, undoEnabled } = payload;
+    this.gameConfig = { size, target };
+    this.reducedMotion = !!reducedMotion || (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false);
+    this.undoEnabled = undoEnabled !== false;
+    saveSettings({ size, target, reducedMotion: this.reducedMotion, undoEnabled: this.undoEnabled });
+    // Start fresh with new config
+    this.onNewGame();
+  };
+
 
   /** Per-frame; poll the input controller here. */
   protected tick(_dt: number): void {
@@ -137,15 +203,26 @@ export class PlayScene extends BasePlayScene {
     this.inputCtl?.destroy();    // cleanup swipe, etc.
     this.game.events.off('ui:new', this.onNewGame, this);
     this.game.events.off('ui:undo', this.onUndo, this);
+    this.game.events.off('ui:applySettings', this.onApplySettings, this);
     this.game.events.off('ui:continue', this.onContinue, this);
+    this.game.events.off('ui:requestSettings', undefined, this);
     super.shutdown?.();
   }
 
   // --- internal helpers ---
   private onNewGame = () => {
     this.winAcknowledged = false;             // reset for a new run
+    clearGame();
     this.state = newGame(this.gameConfig);
+    this.ensureBoardMatchesState();
     this.board.syncInstant(this.state.grid);
+
+    // Try resume from last session if compatible
+    const saved = loadGame();
+    if (saved && saved.grid.length === this.state.grid.length && saved.grid[0].length === this.state.grid[0].length && saved.target === this.state.target) {
+      this.state = saved;
+      this.board.syncInstant(this.state.grid);
+    }
     this.emitScore();
     this.toast('New game');
   };
@@ -155,10 +232,18 @@ export class PlayScene extends BasePlayScene {
   };
 
   private onUndo = () => {
+    if (!this.undoEnabled) { this.toast('Undo disabled'); return; }
     const next = undo(this.state);
     if (next) {
       this.state = next;
       this.board.syncInstant(this.state.grid);
+
+    // Try resume from last session if compatible
+    const saved = loadGame();
+    if (saved && saved.grid.length === this.state.grid.length && saved.grid[0].length === this.state.grid[0].length && saved.target === this.state.target) {
+      this.state = saved;
+      this.board.syncInstant(this.state.grid);
+    }
       this.emitScore();
       this.toast('Undid last move');
     } else {
@@ -206,7 +291,7 @@ export class PlayScene extends BasePlayScene {
   
     try {
       // Pre-commit animation
-      await this.board.animateMoves(plan.diffs, 100);
+      await this.board.animateMoves(plan.diffs, 100, this.reducedMotion);
   
       // Commit + effects
       const { next } = tryMove(this.state, map[dir]);
@@ -215,8 +300,9 @@ export class PlayScene extends BasePlayScene {
   
       this.state = next;
       this.emitScore();
+      saveGame(this.state);
   
-      await this.board.postCommitEffects(this.state.grid, mergeTargets, spawn);
+      await this.board.postCommitEffects(this.state.grid, mergeTargets, spawn, this.reducedMotion);
   
       if (!hasMoves(this.state.grid)) {
         this.game.events.emit('ui:showGameOverDialog');

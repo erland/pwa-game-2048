@@ -113,7 +113,7 @@ export class BoardView extends Phaser.GameObjects.Container {
   /** Animate a set of movement diffs; does not change internal mapping.
    * Call syncInstant() afterwards with the committed grid.
    */
-  public async animateMoves(diffs: { from:{r:number;c:number}; to:{r:number;c:number} }[], duration = 120): Promise<void> {
+  public async animateMoves(diffs: { from:{r:number;c:number}; to:{r:number;c:number} }[], duration = 120, animMs: number = 100, reducedMotion = false): Promise<void> {
     // Build a lookup of current tiles by cell
     const map = new Map(this.tiles);
     const tweens: Promise<void>[] = [];
