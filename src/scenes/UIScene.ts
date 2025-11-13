@@ -1,11 +1,6 @@
 import Phaser from 'phaser';
-
-type SettingsPayload = {
-  size: number;
-  target: number;
-  reducedMotion: boolean;
-  undoEnabled: boolean;
-};
+import { createResultModal } from '../game/ui/ResultModal';
+import { createSettingsOverlay, type SettingsPayload } from '../game/ui/SettingsOverlay';
 
 export class UIScene extends Phaser.Scene {
   static KEY = 'UIScene';
@@ -16,7 +11,7 @@ export class UIScene extends Phaser.Scene {
   private toastText?: Phaser.GameObjects.Text;
   private undoBtn?: Phaser.GameObjects.Text;
 
-  // ----- Modal support (Phase 3) -----
+  // ----- Modal support (Win/Game Over) -----
   private activeModal?: Phaser.GameObjects.Container;
 
   // ----- Settings overlay -----
@@ -31,48 +26,53 @@ export class UIScene extends Phaser.Scene {
     undoEnabled: true,
   };
 
-  constructor() { super(UIScene.KEY); }  // ✅ register the key
+  constructor() {
+    super(UIScene.KEY);
+  }
 
   create(): void {
     const pad = 16;
     const style = {
       fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto',
       fontSize: '20px',
-      color: '#ffffff'
+      color: '#ffffff',
     };
 
-    // Simple top HUD
+    // ----- HUD -----
     this.scoreText  = this.add.text(0, 0, 'Score: 0', style).setDepth(1000);
     this.bestText   = this.add.text(0, 0, 'Best: 0',  style).setDepth(1000);
     this.targetText = this.add.text(0, 0, 'Target: 0', style).setDepth(1000);
-
-    // Position them initially
     this.layoutHud();
 
-    // Buttons
+    // ----- Buttons -----
     const btnStyle = { ...style, fontSize: '18px', color: '#ffea00' as any };
-    const newBtn      = this.add.text(pad,        pad + 60, '[ New ]',      btnStyle).setInteractive({ useHandCursor: true });
-    this.undoBtn      = this.add.text(pad + 90,   pad + 60, '[ Undo ]',     btnStyle).setInteractive({ useHandCursor: true });
-    const settingsBtn = this.add.text(pad + 180,  pad + 60, '[ Settings ]', btnStyle).setInteractive({ useHandCursor: true });
+    const newBtn      = this.add
+      .text(pad, pad + 60, '[ New ]', btnStyle)
+      .setInteractive({ useHandCursor: true });
+    this.undoBtn      = this.add
+      .text(pad + 90, pad + 60, '[ Undo ]', btnStyle)
+      .setInteractive({ useHandCursor: true });
+    const settingsBtn = this.add
+      .text(pad + 180, pad + 60, '[ Settings ]', btnStyle)
+      .setInteractive({ useHandCursor: true });
 
-    newBtn.on('pointerup',  () => this.game.events.emit('ui:new'));
+    newBtn.on('pointerup', () => this.game.events.emit('ui:new'));
     this.undoBtn.on('pointerup', () => this.game.events.emit('ui:undo'));
     settingsBtn.on('pointerup', () => this.game.events.emit('ui:toggleSettings'));
 
     this.updateUndoVisibility();
 
-    // Listen for updates from PlayScene
+    // ----- Event wiring -----
     this.game.events.on('hud:score', this.onHudScore, this);
     this.game.events.on('hud:toast', this.onToast, this);
 
-    // Settings events (uniform, event-driven)
     this.game.events.on('ui:toggleSettings', this.onToggleSettings, this);
     this.game.events.on('ui:settings', this.onSettings, this); // PlayScene replies to ui:requestSettings
 
     // Ask PlayScene to send the current HUD values
     this.game.events.emit('hud:request');
 
-    // Hook Win/GameOver modal events
+    // Win/GameOver modals
     this.hookModalEvents();
   }
 
@@ -83,7 +83,8 @@ export class UIScene extends Phaser.Scene {
     this.game.events.off('ui:settings', this.onSettings, this);
   }
 
-  // --- HUD handlers ---
+  // --- HUD handlers ---------------------------------------------------------
+
   private onHudScore = (payload: { score: number; best: number; target: number }) => {
     this.scoreText.setText(`Score: ${payload.score}`);
     this.bestText.setText(`Best: ${payload.best}`);
@@ -103,7 +104,9 @@ export class UIScene extends Phaser.Scene {
       color: '#ffffff',
       backgroundColor: '#00000080',
       padding: { x: 8, y: 4 },
-    }).setOrigin(0.5, 1).setDepth(1001);
+    })
+      .setOrigin(0.5, 1)
+      .setDepth(1001);
 
     this.tweens.add({
       targets: this.toastText,
@@ -111,11 +114,35 @@ export class UIScene extends Phaser.Scene {
       duration: 1200,
       ease: 'Sine.easeIn',
       delay: 800,
-      onComplete: () => this.toastText?.destroy()
+      onComplete: () => this.toastText?.destroy(),
     });
   };
 
-  // --- Settings handlers ---
+  private layoutHud() {
+    const pad = 16;
+    const gap = 24;
+    const cam = this.cameras.main;
+
+    let x = pad;
+    const y = pad;
+
+    this.scoreText.setPosition(x, y);
+    x += this.scoreText.width + gap;
+
+    this.bestText.setPosition(x, y);
+    x += this.bestText.width + gap;
+
+    this.targetText.setPosition(x, y);
+
+    // If HUD would overflow to the right, just drop Target onto next line
+    const rightMost = this.targetText.x + this.targetText.width + pad;
+    if (rightMost > cam.width) {
+      this.targetText.setPosition(pad, pad + 22);
+    }
+  }
+
+  // --- Settings handlers ----------------------------------------------------
+
   private onToggleSettings = () => {
     const willOpen = !this.settingsOpen;
     if (willOpen) {
@@ -148,39 +175,35 @@ export class UIScene extends Phaser.Scene {
     }
   }
 
-  private layoutHud() {
-    const pad = 16;
-    const gap = 24;
-    const cam = this.cameras.main;
+  // --- Win/Game Over modal (via ResultModal) --------------------------------
 
-    let x = pad;
-    const y = pad;
-
-    this.scoreText.setPosition(x, y);
-    x += this.scoreText.width + gap;
-
-    this.bestText.setPosition(x, y);
-    x += this.bestText.width + gap;
-
-    this.targetText.setPosition(x, y);
-
-    // If HUD would overflow to the right, just drop Target onto next line
-    const rightMost = this.targetText.x + this.targetText.width + pad;
-    if (rightMost > cam.width) {
-      this.targetText.setPosition(pad, pad + 22);
-    }
-  }
-
-  // ----- Modal support (Phase 3) -----
   private hookModalEvents() {
-    this.game.events.on('ui:showWinDialog', () => this.showModal('win'), this);
-    this.game.events.on('ui:showGameOverDialog', () => this.showModal('gameover'), this);
+    this.game.events.on('ui:showWinDialog', this.onShowWinDialog, this);
+    this.game.events.on('ui:showGameOverDialog', this.onShowGameOverDialog, this);
+
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
-      this.game.events.off('ui:showWinDialog', undefined, this);
-      this.game.events.off('ui:showGameOverDialog', undefined, this);
+      this.game.events.off('ui:showWinDialog', this.onShowWinDialog, this);
+      this.game.events.off('ui:showGameOverDialog', this.onShowGameOverDialog, this);
       this.closeModal();
     });
   }
+
+  private onShowWinDialog = () => {
+    this.closeModal();
+    this.activeModal = createResultModal(this, 'win', {
+      onContinue: () => this.game.events.emit('ui:continue'),
+      onNewGame: () => this.game.events.emit('ui:new'),
+      onClose: () => this.closeModal(),
+    });
+  };
+
+  private onShowGameOverDialog = () => {
+    this.closeModal();
+    this.activeModal = createResultModal(this, 'gameover', {
+      onNewGame: () => this.game.events.emit('ui:new'),
+      onClose: () => this.closeModal(),
+    });
+  };
 
   private closeModal() {
     if (this.activeModal) {
@@ -189,188 +212,29 @@ export class UIScene extends Phaser.Scene {
     }
   }
 
-  private makeButton(x:number, y:number, label:string, onClick:()=>void) {
-    const btn = this.add.container(x, y);
-    const bg = this.add.rectangle(0, 0, 160, 44, 0x303040, 0.9)
-      .setOrigin(0.5)
-      .setStrokeStyle(2, 0xffffff, 0.6)
-      .setInteractive({ useHandCursor: true })
-      .on('pointerdown', () => onClick());
-    const txt = this.add.text(0, 0, label, {
-      fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto',
-      fontSize: '18px',
-      color: '#ffffff'
-    }).setOrigin(0.5);
-    btn.add([bg, txt]);
-    return btn;
-  }
+  // --- Settings overlay (via SettingsOverlay helper) ------------------------
 
-  private showModal(kind: 'win' | 'gameover') {
-    this.closeModal();
-
-    const cam = this.cameras.main;
-    const overlay = this.add.container(cam.centerX, cam.centerY).setDepth(2000);
-    const dim = this.add.rectangle(0, 0, cam.width, cam.height, 0x000000, 0.55)
-      .setOrigin(0.5)
-      .setInteractive();
-    const panel = this.add.container(0, 0);
-    const panelBg = this.add.rectangle(
-      0,
-      0,
-      Math.min(420, cam.width - 40),
-      220,
-      0x151520,
-      0.95
-    ).setOrigin(0.5).setStrokeStyle(2, 0xffffff, 0.2);
-    const title = this.add.text(0, -70, kind === 'win' ? 'You Win!' : 'Game Over', {
-      fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto',
-      fontSize: '28px',
-      color: '#ffffff'
-    }).setOrigin(0.5);
-
-    const primary = (kind === 'win')
-      ? this.makeButton(-90, 30, 'Continue', () => { this.game.events.emit('ui:continue'); this.closeModal(); })
-      : this.makeButton(0, 30, 'New Game', () => { this.game.events.emit('ui:new'); this.closeModal(); });
-
-    panel.add([panelBg, title, primary]);
-
-    if (kind === 'win') {
-      const secondary = this.makeButton(90, 30, 'New Game', () => {
-        this.game.events.emit('ui:new');
-        this.closeModal();
-      });
-      panel.add(secondary);
-    }
-
-    overlay.add([dim, panel]);
-    this.activeModal = overlay;
-  }
-
-  // ----- Settings overlay -----
   private buildSettingsOverlay() {
     if (this.settingsLayer) {
       this.settingsLayer.destroy();
       this.settingsLayer = undefined;
     }
 
-    const cam = this.cameras.main;
-    const layer = this.add.container(cam.centerX, cam.centerY).setDepth(2500);
-    const dim = this.add.rectangle(0, 0, cam.width, cam.height, 0x000000, 0.55)
-      .setOrigin(0.5)
-      .setInteractive();
-    const panel = this.add.container(0, 0);
-
-    const panelWidth = Math.min(520, cam.width - 40);
-    const panelBg = this.add.rectangle(
-      0,
-      0,
-      panelWidth,
-      300,
-      0x151520,
-      0.95
-    ).setOrigin(0.5).setStrokeStyle(2, 0xffffff, 0.2);
-
-    const title = this.add.text(0, -110, 'Settings', {
-      fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto',
-      fontSize: '26px',
-      color: '#ffffff'
-    }).setOrigin(0.5);
-
-    // Initialize from current settings (injected via ui:settings)
-    let size    = this.currentSettings.size;
-    let target  = this.currentSettings.target;
-    let reduced = this.currentSettings.reducedMotion;
-    let undo    = this.currentSettings.undoEnabled;
-
-    const row = (y:number, label:string, valueText:()=>string, onToggle:()=>void) => {
-      const c = this.add.container(0, y);
-
-      const half = panelWidth / 2 - 16; // small padding inside panel
-      const labelX = -half;
-      const valueX = half;
-
-      const l = this.add.text(labelX, 0, label, {
-        fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto',
-        fontSize: '18px',
-        color: '#ffffff'
-      }).setOrigin(0, 0.5);
-
-      const v = this.add.text(valueX, 0, valueText(), {
-        fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto',
-        fontSize: '18px',
-        color: '#ffea00'
-      }).setOrigin(1, 0.5).setInteractive({ useHandCursor: true });
-
-      // 👉 Tap the value text itself to toggle
-      v.on('pointerup', () => {
-        onToggle();
-        v.setText(valueText());
-      });
-
-      c.add([l, v]);
-      return c;
-    };
-
-    const sizeRow = row(-60, 'Board Size', () => size + 'x' + size, () => {
-      size = size === 5 ? 4 : size + 1;
+    this.settingsLayer = createSettingsOverlay(this, this.currentSettings, {
+      onSave: (settings) => {
+        this.game.events.emit('ui:applySettings', settings);
+        this.toggleSettings(false);
+      },
+      onCancel: () => {
+        this.toggleSettings(false);
+      },
     });
-
-    const targetRow = row(-20, 'Target', () => String(target), () => {
-      const options = [512, 1024, 2048, 4096];
-      const idx = Math.max(0, options.indexOf(target));
-      target = options[(idx + 1) % options.length];
-    });
-
-    const reducedRow = row(20, 'Reduced Motion', () => reduced ? 'On' : 'Off', () => {
-      reduced = !reduced;
-    });
-
-    const undoRow = row(60, 'Undo', () => undo ? 'Enabled' : 'Disabled', () => {
-      undo = !undo;
-    });
-
-    const saveBtn = this.add.text(-80, 110, '[ Save ]', {
-      fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto',
-      fontSize: '18px',
-      color: '#ffea00'
-    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
-
-    const cancelBtn = this.add.text(80, 110, '[ Cancel ]', {
-      fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto',
-      fontSize: '18px',
-      color: '#ffea00'
-    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
-
-    saveBtn.on('pointerup', () => {
-      this.game.events.emit('ui:applySettings', {
-        size,
-        target,
-        reducedMotion: reduced,
-        undoEnabled: undo
-      });
-      this.toggleSettings(false);
-    });
-
-    cancelBtn.on('pointerup', () => this.toggleSettings(false));
-
-    panel.add([
-      panelBg,
-      title,
-      sizeRow,
-      targetRow,
-      reducedRow,
-      undoRow,
-      saveBtn,
-      cancelBtn
-    ]);
-
-    layer.add([dim, panel]);
-    this.settingsLayer = layer;
   }
 
   private toggleSettings(force?: boolean) {
     const next = typeof force === 'boolean' ? force : !this.settingsOpen;
     this.settingsOpen = next;
+
     if (this.settingsOpen) {
       this.buildSettingsOverlay();
     } else {
