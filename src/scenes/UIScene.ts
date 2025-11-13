@@ -146,10 +146,10 @@ export class UIScene extends Phaser.Scene {
       this.undoBtn.disableInteractive();
     }
   }
-  
+
   private layoutHud() {
     const pad = 16;
-    const gap = 36;
+    const gap = 24;
     const cam = this.cameras.main;
   
     // Try horizontal layout first
@@ -167,9 +167,7 @@ export class UIScene extends Phaser.Scene {
     // If HUD would overflow to the right, fall back to vertical stack
     const rightMost = this.targetText.x + this.targetText.width + pad;
     if (rightMost > cam.width) {
-      this.scoreText.setPosition(pad, pad);
-      this.bestText.setPosition(pad, pad + 22);
-      this.targetText.setPosition(pad, pad + 44);
+      this.targetText.setPosition(pad, pad + 22);
     }
   }
   
