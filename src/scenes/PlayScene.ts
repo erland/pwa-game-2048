@@ -72,6 +72,9 @@ export class PlayScene extends BasePlayScene {
   private worldRoot!: Phaser.GameObjects.Container;
   private fitter?: BoardFitter;
   private inputCtl?: GameInputController;
+  // Show Win dialog only once per game
+  private winAcknowledged = false;
+  private gameConfig = { size: 4, target: 32 };
 
   /** BasePlayScene will call this (no args). Build your world here. */
   protected buildWorld(): void {
@@ -79,7 +82,7 @@ export class PlayScene extends BasePlayScene {
     this.worldRoot = this.add.container(0, 0);
 
     // Domain state
-    this.state = newGame({ size: 4, target: 2048 });
+    this.state = newGame(this.gameConfig);
 
     // Board view (no textures; graphics+text)
     const rows = this.state.grid.length;
@@ -107,6 +110,7 @@ export class PlayScene extends BasePlayScene {
     // UIScene comms
     this.game.events.on('ui:new', this.onNewGame, this);
     this.game.events.on('ui:undo', this.onUndo, this);
+    this.game.events.on('ui:continue', this.onContinue, this);
 
     // Framework DirectionalInputController (keyboard+swipe+gamepad)
     this.inputCtl = new GameInputController(this, (dir) => this.onMove(dir));
@@ -133,15 +137,21 @@ export class PlayScene extends BasePlayScene {
     this.inputCtl?.destroy();    // cleanup swipe, etc.
     this.game.events.off('ui:new', this.onNewGame, this);
     this.game.events.off('ui:undo', this.onUndo, this);
+    this.game.events.off('ui:continue', this.onContinue, this);
     super.shutdown?.();
   }
 
   // --- internal helpers ---
   private onNewGame = () => {
-    this.state = newGame({ size: 4, target: 2048 });
+    this.winAcknowledged = false;             // reset for a new run
+    this.state = newGame(this.gameConfig);
     this.board.syncInstant(this.state.grid);
     this.emitScore();
     this.toast('New game');
+  };
+
+  private onContinue = () => {
+    this.winAcknowledged = true;              // user chose to continue: don't show win again
   };
 
   private onUndo = () => {
@@ -208,11 +218,13 @@ export class PlayScene extends BasePlayScene {
   
       await this.board.postCommitEffects(this.state.grid, mergeTargets, spawn);
   
-      if (hasWon(this.state.grid, this.state.target)) {
-        this.toast('You win!');
-      } else if (!hasMoves(this.state.grid)) {
-        this.toast('Game over');
-      }
+      if (!hasMoves(this.state.grid)) {
+        this.game.events.emit('ui:showGameOverDialog');
+      }else if (hasWon(this.state.grid, this.state.target)) {
+        if (!this.winAcknowledged) {
+          this.game.events.emit('ui:showWinDialog');
+        }
+      } 
     } finally {
       this.animLock = false; // ⬅️ always release
       if (this.queued) {
