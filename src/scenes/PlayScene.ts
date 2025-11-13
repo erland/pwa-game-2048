@@ -22,6 +22,7 @@ import {
 import UIScene from './UIScene';
 import { loadSettings, saveSettings, type Settings } from '../game/services/settings';
 import { saveGame, loadGame, clearGame } from '../game/services/persistence';
+import { loadBest, saveBest } from '../game/services/bestScore';   // ✅ NEW
 
 /** Maps framework Dir4 to our reducer’s dir strings */
 function dir4ToStr(d: Dir4): 'up' | 'down' | 'left' | 'right' {
@@ -96,8 +97,7 @@ export class PlayScene extends BasePlayScene {
     this.undoEnabled = s.undoEnabled !== false;
     this.computePerfMode();
 
-    // Domain state
-    clearGame();
+    // Domain state: DON'T clear saved game here – we want refresh to resume
     this.state = newGame(this.gameConfig);
 
     // Board view (no textures; graphics+text) + fitter
@@ -113,6 +113,12 @@ export class PlayScene extends BasePlayScene {
     ) {
       this.state = saved;
       this.board.syncInstant(this.state.grid);
+    }
+
+    // Hydrate best score from dedicated storage (in case we had no saved game)
+    const persistedBest = loadBest();
+    if (persistedBest > (this.state.best ?? 0)) {
+      this.state.best = persistedBest;
     }
 
     this.cameras.main.setRoundPixels(true);
@@ -271,23 +277,21 @@ export class PlayScene extends BasePlayScene {
 
   // --- internal helpers ---
   private onNewGame = () => {
-    this.winAcknowledged = false;             // reset for a new run
-    clearGame();
+    // Keep the highest known best score (current run vs persisted)
+    const prevBest = this.state?.best ?? 0;
+    const persistedBest = loadBest();
+    const best = Math.max(prevBest, persistedBest);
+
+    this.winAcknowledged = false; // reset for a new run
+    clearGame();                  // clear saved board, but NOT best
+
     this.state = newGame(this.gameConfig);
+    this.state.best = best;       // carry best into the new run
+
+    // Persist best in case user refreshes immediately
+    saveBest(best);
+
     this.ensureBoardMatchesState();
-
-    // Try resume from last session if compatible
-    const saved = loadGame();
-    if (
-      saved &&
-      saved.grid.length === this.state.grid.length &&
-      saved.grid[0].length === this.state.grid[0].length &&
-      saved.target === this.state.target
-    ) {
-      this.state = saved;
-      this.board.syncInstant(this.state.grid);
-    }
-
     this.emitScore();
     this.toast('New game');
   };
@@ -363,6 +367,13 @@ export class PlayScene extends BasePlayScene {
       const mergeTargets = collectMergeTargets(plan.diffs);
 
       this.state = next;
+
+      // Persist best if it increased
+      const persistedBest = loadBest();
+      if (this.state.best > persistedBest) {
+        saveBest(this.state.best);
+      }
+
       this.emitScore();
       saveGame(this.state);
 
