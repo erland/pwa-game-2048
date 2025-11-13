@@ -35,6 +35,7 @@ export class BoardView extends Phaser.GameObjects.Container {
     const { cols, tileSize, gap } = this.opts;
     return cols * tileSize + (cols + 1) * gap;
   }
+
   pixelHeight(): number {
     const { rows, tileSize, gap } = this.opts;
     return rows * tileSize + (rows + 1) * gap;
@@ -65,6 +66,7 @@ export class BoardView extends Phaser.GameObjects.Container {
       default:  return 0x3c3a32;
     }
   }
+
   private textColorFor(value: number): string {
     return value <= 4 ? '#776e65' : '#f9f6f2';
   }
@@ -100,7 +102,13 @@ export class BoardView extends Phaser.GameObjects.Container {
       for (let c = 0; c < grid[r].length; c++) {
         const v = grid[r][c];
         if (v === 0) continue;
-        const t = new TileView(this.scene, this.opts.tileSize, this.opts.radius ?? 12, this.opts.fontFamily);
+
+        const t = new TileView(
+          this.scene,
+          this.opts.tileSize,
+          this.opts.radius ?? 12,
+          this.opts.fontFamily
+        );
         t.setValue(v);
         const { x, y } = this.cellCenter(r, c);
         t.setPosition(x, y);
@@ -110,45 +118,92 @@ export class BoardView extends Phaser.GameObjects.Container {
     }
   }
 
-  /** Animate a set of movement diffs; does not change internal mapping.
+  /**
+   * Animate a set of movement diffs.
    * Call syncInstant() afterwards with the committed grid.
+   *
+   * @param diffs - move diffs from the planner
+   * @param animMs - nominal animation duration in ms
+   * @param reducedMotion - if true, use a shorter, simpler animation
    */
-  public async animateMoves(diffs: { from:{r:number;c:number}; to:{r:number;c:number} }[], duration = 120, animMs: number = 100, reducedMotion = false): Promise<void> {
+  public async animateMoves(
+    diffs: { from:{r:number;c:number}; to:{r:number;c:number} }[],
+    animMs: number = 100,
+    reducedMotion: boolean = false
+  ): Promise<void> {
     // Build a lookup of current tiles by cell
     const map = new Map(this.tiles);
-    const tweens: Promise<void>[] = [];
 
+    // If caller explicitly passes 0, just snap
+    if (animMs <= 0) {
+      for (const d of diffs) {
+        const key = `${d.from.r},${d.from.c}`;
+        const tv = map.get(key);
+        if (!tv) continue;
+        const { x, y } = this.cellCenter(d.to.r, d.to.c);
+        tv.setPosition(x, y);
+      }
+      return;
+    }
+
+    // Reduced motion: shorter duration, but still animated
+    const effectiveMs = reducedMotion ? Math.min(animMs, 60) : animMs;
+
+    const tweens: Promise<void>[] = [];
     for (const d of diffs) {
       const key = `${d.from.r},${d.from.c}`;
       const tv = map.get(key);
-      if (!tv) continue; // tile might be invisible (shouldn't happen if grid is in sync)
+      if (!tv) continue;
       const { x, y } = this.cellCenter(d.to.r, d.to.c);
-      tweens.push(tv.moveTo(x, y, duration));
+      tweens.push(tv.moveTo(x, y, effectiveMs));
     }
-    await Promise.all(tweens);
+
+    if (tweens.length > 0) {
+      await Promise.all(tweens);
+    }
   }
 
-  /** After committing the state, pulse merged survivors and animate spawned tile. */
+  /**
+   * After committing the state, pulse merged survivors and animate spawned tile.
+   * When reducedMotion is true, we keep a minimal effect (just spawn pop-in).
+   */
   public async postCommitEffects(
     grid: number[][],
     mergeTargets: { r:number; c:number; newValue:number }[],
-    spawn?: { r:number; c:number }
+    spawn?: { r:number; c:number },
+    reducedMotion: boolean = false
   ) {
-    this.syncInstant(grid); // tiles are already at their final values/positions
-  
-    // Pulse all survivors in parallel (no re-setValue needed)
-    const pulses = mergeTargets.map(m => {
-      const t = this.tiles.get(`${m.r},${m.c}`);
-      return t ? t.pulseMerge() : Promise.resolve();
-    });
-  
-    // Spawn animation (if any)
+    // Ensure tiles reflect the new grid
+    this.syncInstant(grid);
+
+    const pulses: Promise<void>[] = [];
     let spawnP: Promise<void> = Promise.resolve();
-    if (spawn) {
-      const t = this.tiles.get(`${spawn.r},${spawn.c}`);
-      if (t) spawnP = t.spawnIn();
+
+    if (!reducedMotion) {
+      // Full effects: pulses + spawn
+      for (const m of mergeTargets) {
+        const t = this.tiles.get(`${m.r},${m.c}`);
+        if (t) {
+          pulses.push(t.pulseMerge());
+        }
+      }
+
+      if (spawn) {
+        const t = this.tiles.get(`${spawn.r},${spawn.c}`);
+        if (t) {
+          spawnP = t.spawnIn();
+        }
+      }
+    } else {
+      // Reduced motion: skip merge pulses, keep a quick spawn pop-in only
+      if (spawn) {
+        const t = this.tiles.get(`${spawn.r},${spawn.c}`);
+        if (t) {
+          spawnP = t.spawnIn();
+        }
+      }
     }
-  
+
     await Promise.all([spawnP, ...pulses]);
   }
 }
