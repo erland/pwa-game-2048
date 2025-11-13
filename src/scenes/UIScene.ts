@@ -312,7 +312,7 @@ export class UIScene extends Phaser.Scene {
     };
 
     const sizeRow = row(-60, 'Board Size', () => size + 'x' + size, () => {
-      size = size === 6 ? 3 : size + 1;
+      size = size === 5 ? 4 : size + 1;
     });
 
     const targetRow = row(-20, 'Target', () => String(target), () => {
