@@ -4,10 +4,9 @@ import { MenuScene } from './scenes/MenuScene';
 import { PlayScene } from './scenes/PlayScene';
 import { UIScene } from './scenes/UIScene';
 import { PauseScene } from './scenes/PauseScene';
-import { GameOverScene } from './scenes/GameOverScene';
 
 /** Launch with sensible defaults (resize mode, pixelArt, etc.). */
-GameHost.launch('app', [BootScene, MenuScene, PlayScene, UIScene, PauseScene, GameOverScene], {
+GameHost.launch('app', [BootScene, MenuScene, PlayScene, UIScene, PauseScene], {
   width: 800,
   height: 600,
   backgroundColor: 0x000000,
