@@ -79,9 +79,9 @@ export class PlayScene extends BasePlayScene {
   private gameConfig!: { size: number; target: number };
   private reducedMotion = false;
   private undoEnabled = true;
+  private perfMode = false;
   private boardRows = 0;
   private boardCols = 0;
-  
 
   /** BasePlayScene will call this (no args). Build your world here. */
   protected buildWorld(): void {
@@ -94,12 +94,13 @@ export class PlayScene extends BasePlayScene {
     this.reducedMotion =
       s.reducedMotion || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || false;
     this.undoEnabled = s.undoEnabled !== false;
+    this.computePerfMode();
 
     // Domain state
     clearGame();
     this.state = newGame(this.gameConfig);
 
-    // Board view (no textures; graphics+text)
+    // Board view (no textures; graphics+text) + fitter
     this.ensureBoardMatchesState();
 
     // Try resume from last session if compatible
@@ -114,14 +115,6 @@ export class PlayScene extends BasePlayScene {
       this.board.syncInstant(this.state.grid);
     }
 
-    // Framework BoardFitter — fits/centers based on dynamic size
-    this.fitter = new BoardFitter(
-      this,
-      this.worldRoot,
-      () => ({ w: this.board.pixelWidth(), h: this.board.pixelHeight() }),
-      { fitMode: 'fit', integerZoom: true }
-    );
-    this.fitter.attach();
     this.cameras.main.setRoundPixels(true);
 
     // UIScene comms
@@ -129,7 +122,7 @@ export class PlayScene extends BasePlayScene {
     this.game.events.on('ui:undo', this.onUndo, this);
     this.game.events.on('ui:continue', this.onContinue, this);
 
-    // ✅ Provide current settings to UIScene on request
+    // Provide current settings to UIScene on request
     this.game.events.on('ui:requestSettings', () => {
       this.game.events.emit('ui:settings', {
         size: this.gameConfig.size,
@@ -139,7 +132,7 @@ export class PlayScene extends BasePlayScene {
       });
     }, this);
 
-    // Framework DirectionalInputController (keyboard+swipe+gamepad)
+    // Input
     this.inputCtl = new GameInputController(this, (dir) => this.onMove(dir));
     this.inputCtl.attach();
 
@@ -157,14 +150,49 @@ export class PlayScene extends BasePlayScene {
     this.emitScore();
   }
 
-  /** Create or resize the BoardView to match current this.state.grid, then sync. */
+  private get effectiveReducedMotion(): boolean {
+    // If perfMode is on, we *always* run with reduced motion.
+    return this.perfMode || this.reducedMotion;
+  }
+
+  private computePerfMode() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = window.innerWidth || this.scale.width;
+    const h = window.innerHeight || this.scale.height;
+
+    const pixelArea = w * h * dpr * dpr;
+
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    // crude “old iOS” guess: Safari without the newest versions in UA
+    const isVeryOldIOS = isIOS && /OS 1[0-3]_/.test(navigator.userAgent); // e.g. iOS 10–13
+
+    const bigBoard = this.gameConfig.size > 4;
+
+    const prefersReduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+
+    // Heuristic:
+    // - Big board on a high-res screen
+    // - OR old-ish iOS
+    // - OR system reduced motion
+    this.perfMode =
+      prefersReduced ||
+      isVeryOldIOS ||
+      (bigBoard && pixelArea > 1_500_000); // tweak this threshold if you like
+  }
+
+  /**
+   * Create or resize the BoardView to match current this.state.grid,
+   * and (re)build the BoardFitter so it knows the new board size.
+   */
   private ensureBoardMatchesState() {
     const rows = this.state.grid.length;
     const cols = this.state.grid[0].length;
     const sizeChanged = !this.board || rows !== this.boardRows || cols !== this.boardCols;
 
     if (sizeChanged) {
-      if (this.board) this.board.destroy();
+      if (this.board) {
+        this.board.destroy();
+      }
 
       this.board = new BoardView(this, {
         rows,
@@ -177,30 +205,53 @@ export class PlayScene extends BasePlayScene {
 
       this.boardRows = rows;
       this.boardCols = cols;
+
+      // (Re)build BoardFitter for the new dimensions
+      if (this.fitter) {
+        this.fitter.destroy();
+      }
+      this.fitter = new BoardFitter(
+        this,
+        this.worldRoot,
+        () => ({ w: this.board.pixelWidth(), h: this.board.pixelHeight() }),
+        { fitMode: 'fit', integerZoom: true }
+      );
+      this.fitter.attach();
     }
 
+    // Always sync grid into the current BoardView
     this.board.syncInstant(this.state.grid);
   }
 
   private onApplySettings = (payload: Settings) => {
     const { size, target, reducedMotion, undoEnabled } = payload;
     this.gameConfig = { size, target };
-    this.reducedMotion = !!reducedMotion || (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false);
+    this.reducedMotion =
+      !!reducedMotion ||
+      (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false);
     this.undoEnabled = undoEnabled !== false;
-    saveSettings({ size, target, reducedMotion: this.reducedMotion, undoEnabled: this.undoEnabled });
 
-    // 👇 notify UIScene so it can hide/show Undo immediately
+    saveSettings({
+      size,
+      target,
+      reducedMotion: this.reducedMotion,
+      undoEnabled: this.undoEnabled,
+    });
+
+    // Recompute perf mode with new size / screen
+    this.computePerfMode();
+
+    // Notify UIScene so it can hide/show Undo immediately
     this.game.events.emit('ui:settings', {
       size: this.gameConfig.size,
       target: this.gameConfig.target,
       reducedMotion: this.reducedMotion,
       undoEnabled: this.undoEnabled,
     });
-    
+
     // Start fresh with new config
     this.onNewGame();
   };
-
 
   /** Per-frame; poll the input controller here. */
   protected tick(_dt: number): void {
@@ -224,35 +275,37 @@ export class PlayScene extends BasePlayScene {
     clearGame();
     this.state = newGame(this.gameConfig);
     this.ensureBoardMatchesState();
-    this.board.syncInstant(this.state.grid);
 
     // Try resume from last session if compatible
     const saved = loadGame();
-    if (saved && saved.grid.length === this.state.grid.length && saved.grid[0].length === this.state.grid[0].length && saved.target === this.state.target) {
+    if (
+      saved &&
+      saved.grid.length === this.state.grid.length &&
+      saved.grid[0].length === this.state.grid[0].length &&
+      saved.target === this.state.target
+    ) {
       this.state = saved;
       this.board.syncInstant(this.state.grid);
     }
+
     this.emitScore();
     this.toast('New game');
   };
 
   private onContinue = () => {
-    this.winAcknowledged = true;              // user chose to continue: don't show win again
+    this.winAcknowledged = true; // user chose to continue: don't show win again
   };
 
   private onUndo = () => {
-    if (!this.undoEnabled) { this.toast('Undo disabled'); return; }
+    if (!this.undoEnabled) {
+      this.toast('Undo disabled');
+      return;
+    }
+
     const next = undo(this.state);
     if (next) {
       this.state = next;
       this.board.syncInstant(this.state.grid);
-
-    // Try resume from last session if compatible
-    const saved = loadGame();
-    if (saved && saved.grid.length === this.state.grid.length && saved.grid[0].length === this.state.grid[0].length && saved.target === this.state.target) {
-      this.state = saved;
-      this.board.syncInstant(this.state.grid);
-    }
       this.emitScore();
       this.toast('Undid last move');
     } else {
@@ -266,16 +319,16 @@ export class PlayScene extends BasePlayScene {
       return;
     }
     this.animLock = true; // ⬅️ lock immediately
-  
+
     const map: Record<string, MoveDir> = {
       up: MoveDir.Up,
       down: MoveDir.Down,
       left: MoveDir.Left,
       right: MoveDir.Right,
     };
-  
+
     const plan = planMove(this.state, map[dir]);
-  
+
     // Invalid move: do a nudge, then unlock and play any queued input
     if (!plan.changed) {
       const axis = dir === 'left' || dir === 'right' ? 'x' : 'y';
@@ -297,29 +350,31 @@ export class PlayScene extends BasePlayScene {
       }
       return;
     }
-  
+
     try {
+      const rm = this.effectiveReducedMotion;
+
       // Pre-commit animation
-      await this.board.animateMoves(plan.diffs, 100, this.reducedMotion);
-  
+      await this.board.animateMoves(plan.diffs, 100, rm);
+
       // Commit + effects
       const { next } = tryMove(this.state, map[dir]);
       const spawn = findSpawn(plan.gridAfterMove, next.grid);
       const mergeTargets = collectMergeTargets(plan.diffs);
-  
+
       this.state = next;
       this.emitScore();
       saveGame(this.state);
-  
-      await this.board.postCommitEffects(this.state.grid, mergeTargets, spawn, this.reducedMotion);
-  
+
+      await this.board.postCommitEffects(this.state.grid, mergeTargets, spawn, rm);
+
       if (!hasMoves(this.state.grid)) {
         this.game.events.emit('ui:showGameOverDialog');
-      }else if (hasWon(this.state.grid, this.state.target)) {
+      } else if (hasWon(this.state.grid, this.state.target)) {
         if (!this.winAcknowledged) {
           this.game.events.emit('ui:showWinDialog');
         }
-      } 
+      }
     } finally {
       this.animLock = false; // ⬅️ always release
       if (this.queued) {
@@ -345,19 +400,23 @@ export class PlayScene extends BasePlayScene {
 export default PlayScene;
 
 function findSpawn(before: number[][], after: number[][]): {r:number;c:number} | undefined {
-  for (let r=0; r<after.length; r++) {
-    for (let c=0; c<after[r].length; c++) {
+  for (let r = 0; r < after.length; r++) {
+    for (let c = 0; c < after[r].length; c++) {
       if (before[r][c] === 0 && after[r][c] !== 0) return { r, c };
     }
   }
   return undefined;
 }
-function collectMergeTargets(diffs: { to:{r:number;c:number}; survivor?:boolean; newValue?: number }[]): {r:number;c:number;newValue:number}[] {
+
+function collectMergeTargets(
+  diffs: { to:{r:number;c:number}; survivor?:boolean; newValue?: number }[]
+): {r:number;c:number;newValue:number}[] {
   const m = new Map<string, number>();
   for (const d of diffs) if (d.survivor && d.newValue) {
     m.set(`${d.to.r},${d.to.c}`, d.newValue);
   }
-  return Array.from(m.entries()).map(([k,v]) => {
-    const [rs,cs] = k.split(','); return { r: parseInt(rs,10), c: parseInt(cs,10), newValue: v };
+  return Array.from(m.entries()).map(([k, v]) => {
+    const [rs, cs] = k.split(',');
+    return { r: parseInt(rs, 10), c: parseInt(cs, 10), newValue: v };
   });
 }
