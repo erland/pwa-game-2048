@@ -12,7 +12,9 @@ export class UIScene extends Phaser.Scene {
 
   private scoreText!: Phaser.GameObjects.Text;
   private bestText!: Phaser.GameObjects.Text;
+  private targetText!: Phaser.GameObjects.Text;
   private toastText?: Phaser.GameObjects.Text;
+  private undoBtn?: Phaser.GameObjects.Text;
 
   // ----- Modal support (Phase 3) -----
   private activeModal?: Phaser.GameObjects.Container;
@@ -35,19 +37,25 @@ export class UIScene extends Phaser.Scene {
     const pad = 16;
     const style = { fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto', fontSize: '20px', color: '#ffffff' };
 
-    // Simple top-left HUD
-    this.scoreText = this.add.text(pad, pad, 'Score: 0', style).setDepth(1000);
-    this.bestText  = this.add.text(pad, pad + 26, 'Best: 0', style).setDepth(1000);
+    // Simple top  HUD
+    this.scoreText  = this.add.text(0, 0, 'Score: 0', style).setDepth(1000);
+    this.bestText   = this.add.text(0, 0, 'Best: 0', style).setDepth(1000);
+    this.targetText = this.add.text(0, 0, 'Target: 0', style).setDepth(1000);
+
+    // Position them initially
+    this.layoutHud();
 
     // Buttons (text buttons for Phase 2)
     const btnStyle = { ...style, fontSize: '18px', color: '#ffea00' as any };
     const newBtn      = this.add.text(pad,        pad + 60, '[ New ]',      btnStyle).setInteractive({ useHandCursor: true });
-    const undoBtn     = this.add.text(pad + 90,   pad + 60, '[ Undo ]',     btnStyle).setInteractive({ useHandCursor: true });
+    this.undoBtn     = this.add.text(pad + 90,   pad + 60, '[ Undo ]',     btnStyle).setInteractive({ useHandCursor: true });
     const settingsBtn = this.add.text(pad + 180,  pad + 60, '[ Settings ]', btnStyle).setInteractive({ useHandCursor: true });
 
     newBtn.on('pointerup',  () => this.game.events.emit('ui:new'));
-    undoBtn.on('pointerup', () => this.game.events.emit('ui:undo'));
+    this.undoBtn.on('pointerup', () => this.game.events.emit('ui:undo'));
     settingsBtn.on('pointerup', () => this.game.events.emit('ui:toggleSettings'));
+
+    this.updateUndoVisibility();
 
     // Listen for updates from PlayScene
     this.game.events.on('hud:score', this.onHudScore, this);
@@ -71,10 +79,13 @@ export class UIScene extends Phaser.Scene {
     this.game.events.off('ui:settings', this.onSettings, this);
   }
 
+
   // --- HUD handlers ---
   private onHudScore = (payload: { score: number; best: number; target: number }) => {
     this.scoreText.setText(`Score: ${payload.score}`);
     this.bestText.setText(`Best: ${payload.best}`);
+    this.targetText.setText(`Target: ${payload.target}`);
+    this.layoutHud();
   };
 
   private onToast = (payload: { message: string }) => {
@@ -116,8 +127,52 @@ export class UIScene extends Phaser.Scene {
 
   private onSettings = (payload: SettingsPayload) => {
     this.currentSettings = payload;
+    this.updateUndoVisibility();
   };
 
+  private updateUndoVisibility() {
+    if (!this.undoBtn) return;
+    const enabled = this.currentSettings.undoEnabled;
+  
+    this.undoBtn.setVisible(enabled);
+    this.undoBtn.setActive(enabled);
+  
+    // toggle interactivity too
+    this.undoBtn.removeAllListeners(); // clear old listeners
+    if (enabled) {
+      this.undoBtn.setInteractive({ useHandCursor: true });
+      this.undoBtn.on('pointerup', () => this.game.events.emit('ui:undo'));
+    } else {
+      this.undoBtn.disableInteractive();
+    }
+  }
+  
+  private layoutHud() {
+    const pad = 16;
+    const gap = 36;
+    const cam = this.cameras.main;
+  
+    // Try horizontal layout first
+    let x = pad;
+    const y = pad;
+  
+    this.scoreText.setPosition(x, y);
+    x += this.scoreText.width + gap;
+  
+    this.bestText.setPosition(x, y);
+    x += this.bestText.width + gap;
+  
+    this.targetText.setPosition(x, y);
+  
+    // If HUD would overflow to the right, fall back to vertical stack
+    const rightMost = this.targetText.x + this.targetText.width + pad;
+    if (rightMost > cam.width) {
+      this.scoreText.setPosition(pad, pad);
+      this.bestText.setPosition(pad, pad + 22);
+      this.targetText.setPosition(pad, pad + 44);
+    }
+  }
+  
   // ----- Modal support (Phase 3) -----
   private hookModalEvents() {
     this.game.events.on('ui:showWinDialog', () => this.showModal('win'), this);

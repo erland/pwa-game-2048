@@ -188,6 +188,15 @@ export class PlayScene extends BasePlayScene {
     this.reducedMotion = !!reducedMotion || (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false);
     this.undoEnabled = undoEnabled !== false;
     saveSettings({ size, target, reducedMotion: this.reducedMotion, undoEnabled: this.undoEnabled });
+
+    // 👇 notify UIScene so it can hide/show Undo immediately
+    this.game.events.emit('ui:settings', {
+      size: this.gameConfig.size,
+      target: this.gameConfig.target,
+      reducedMotion: this.reducedMotion,
+      undoEnabled: this.undoEnabled,
+    });
+    
     // Start fresh with new config
     this.onNewGame();
   };
